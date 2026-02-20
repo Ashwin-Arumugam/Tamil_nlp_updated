@@ -4,10 +4,29 @@ from streamlit_gsheets import GSheetsConnection
 import time
 
 # =========================================================
-# 1. CONFIGURATION
+# 1. CONFIGURATION & CSS
 # =========================================================
 
 st.set_page_config(page_title="Model Eval Tool", layout="wide")
+
+# CSS to force pills onto a single line and reduce spacing
+st.markdown(
+    """
+    <style>
+    /* Target the pills container to prevent wrapping and reduce gap */
+    div[data-testid="stPills"] > div {
+        flex-wrap: nowrap !important;
+        gap: 3px !important;
+        overflow-x: auto; /* Adds a tiny scrollbar ONLY if the screen is super small */
+    }
+    /* Reduce the padding inside the pills to help them fit */
+    div[data-testid="stPills"] button {
+        padding: 2px 8px !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
 MASTER_SHEET_GID = 1905633307 
 
