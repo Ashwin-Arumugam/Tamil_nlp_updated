@@ -314,6 +314,9 @@ if st.session_state.u_index >= len(unique_list):
 current_incorrect = unique_list[st.session_state.u_index]
 versions = master_df[master_df["incorrect"] == current_incorrect]
 
+# Sentence Counter at the top
+st.markdown(f"<center><h4>Sentence {st.session_state.u_index + 1} of {len(unique_list)}</h4></center>", unsafe_allow_html=True)
+
 st.info(f"**Original:** {current_incorrect}")
 st.divider()
 
@@ -330,7 +333,8 @@ for row_idx, row_ids in enumerate(rows):
             if not m_row.empty:
                 specific_sub_id = str(m_row.index[0] + 2)
                 
-                st.markdown(f"**{MODEL_TAB_NAMES[m_id].capitalize()}** <span style='color:red'>*</span>", unsafe_allow_html=True)
+                # Display only the letter key (A, B, C, etc.)
+                st.markdown(f"**{m_id}** <span style='color:red'>*</span>", unsafe_allow_html=True)
                 st.success(m_row.iloc[0]["corrected"])
                 
                 key = f"pills_{m_id}_{st.session_state.u_index}"
@@ -356,7 +360,7 @@ for row_idx, row_ids in enumerate(rows):
                         key=reason_key
                     )
             else:
-                st.warning(f"No data for {MODEL_TAB_NAMES[m_id]}")
+                st.warning(f"No data for {m_id}")
                 
     # Buffer space between the two rows so layout stays clean
     if row_idx < len(rows) - 1:
@@ -379,9 +383,10 @@ with b_c1:
         save_to_local_memory(current_incorrect, versions)
         st.session_state.u_index -= 1
         st.rerun()
-        
+
+# The middle column is left empty to push the buttons to the corners
 with b_c2:
-    st.markdown(f"<center><b>Sentence {st.session_state.u_index + 1} of {len(unique_list)}</b></center>", unsafe_allow_html=True)
+    pass
 
 with b_c3:
     if st.button("Next ➡️", use_container_width=True):
