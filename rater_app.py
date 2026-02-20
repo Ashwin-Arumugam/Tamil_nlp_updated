@@ -432,7 +432,8 @@ st.text_area("Correction (Optional):", value=existing_correction, key=f"fix_{st.
 st.divider()
 
 # --- Navigation (Bottom) ---
-b_c1, b_c2, b_c3 = st.columns([1, 8, 1])
+# Adjusted column widths to fit the jump feature
+b_c1, b_c2, b_c3, b_c4 = st.columns([2, 3, 2, 2])
 
 with b_c1:
     if st.button("⬅️ Prev", use_container_width=True) and st.session_state.u_index > 0:
@@ -441,9 +442,24 @@ with b_c1:
         st.rerun()
 
 with b_c2:
-    pass
+    # 1-based index for the user interface
+    jump_val = st.number_input(
+        "Jump to sentence:", 
+        min_value=1, 
+        max_value=len(unique_list), 
+        value=st.session_state.u_index + 1,
+        label_visibility="collapsed"
+    )
 
 with b_c3:
+    if st.button("🚀 Jump", use_container_width=True):
+        if jump_val - 1 != st.session_state.u_index:
+            # Save any current progress before jumping
+            save_to_local_memory(current_incorrect, versions)
+            st.session_state.u_index = jump_val - 1
+            st.rerun()
+
+with b_c4:
     if st.button("Next ➡️", use_container_width=True):
         all_rated = True
         for m_id in MODEL_TAB_NAMES.keys():
