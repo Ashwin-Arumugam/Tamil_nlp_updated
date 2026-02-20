@@ -28,10 +28,10 @@ CORRECTION_COLS = ["submission_id", "user", "user_corrected"]
 # =========================================================
 
 if "username" not in st.session_state:
-    st.title("Login")
-    with st.form("login"):
-        user = st.text_input("Username")
-        if st.form_submit_button("Start") and user:
+    st.title("Tamil NLP grammar correction")
+    with st.form("entry_form"):
+        user = st.text_input("Name")
+        if st.form_submit_button("Continue") and user:
             st.session_state.username = user.strip()
             st.session_state.conn = st.connection("gsheets", type=GSheetsConnection)
             st.cache_data.clear()
@@ -215,8 +215,19 @@ def sync_to_cloud():
     time.sleep(1.0)
     save_bar.empty()
 
+def get_first_unrated_index(unique_list, master_df):
+    for idx, sentence in enumerate(unique_list):
+        versions = master_df[master_df["incorrect"] == sentence]
+        for m_id in MODEL_TAB_NAMES.keys():
+            m_row = versions[versions["id"] == m_id]
+            if not m_row.empty:
+                specific_sub_id = str(m_row.index[0] + 2)
+                if get_existing_rating(m_id, specific_sub_id) is None:
+                    return idx
+    return len(unique_list)
+
 if "u_index" not in st.session_state:
-    st.session_state.u_index = 0
+    st.session_state.u_index = get_first_unrated_index(unique_list, master_df)
 
 # =========================================================
 # 4. MAIN UI & LOGOUT HEADER
@@ -224,9 +235,9 @@ if "u_index" not in st.session_state:
 
 top_c1, top_c2 = st.columns([8, 2])
 with top_c1:
-    st.markdown(f"👤 Logged in as: **{st.session_state.username}**")
+    st.markdown(f"👤 Name: **{st.session_state.username}**")
 with top_c2:
-    if st.button("Logout & Save", type="primary", use_container_width=True):
+    if st.button("Save & Exit", type="primary", use_container_width=True):
         if st.session_state.u_index < len(unique_list):
             current_incorrect = unique_list[st.session_state.u_index]
             versions = master_df[master_df["incorrect"] == current_incorrect]
@@ -240,7 +251,7 @@ with top_c2:
 st.divider()
 
 if st.session_state.u_index >= len(unique_list):
-    st.success("🎉 You've reached the end! Please click **Logout & Save** above to upload your evaluations.")
+    st.success("🎉 You've reached the end! Please click **Save & Exit** above to upload your evaluations.")
     st.stop()
 
 current_incorrect = unique_list[st.session_state.u_index]
@@ -257,7 +268,6 @@ if c1.button("⬅️ Prev") and st.session_state.u_index > 0:
 c2.markdown(f"<center><b>Sentence {st.session_state.u_index + 1} of {len(unique_list)}</b></center>", unsafe_allow_html=True)
 
 if c3.button("Next ➡️"):
-    # VALIDATION: Check if all present models have a rating
     all_rated = True
     for m_id in MODEL_TAB_NAMES.keys():
         m_row = versions[versions["id"] == m_id]
@@ -272,7 +282,7 @@ if c3.button("Next ➡️"):
         st.session_state.u_index += 1
         st.rerun()
     else:
-        st.error("⚠️ Please rate all displayed models before proceeding to the next sentence.")
+        st.toast("⚠️ Please rate all displayed models before proceeding to the next sentence.", icon="🚨")
 
 st.info(f"**Original:** {current_incorrect}")
 st.divider()
@@ -290,7 +300,7 @@ for row_ids in rows:
             if not m_row.empty:
                 specific_sub_id = str(m_row.index[0] + 2)
                 
-                st.markdown(f"**{MODEL_TAB_NAMES[m_id].capitalize()}**")
+                st.markdown(f"**{MODEL_TAB_NAMES[m_id].capitalize()}** <span style='color:red'>*</span>", unsafe_allow_html=True)
                 st.success(m_row.iloc[0]["corrected"])
                 
                 key = f"pills_{m_id}_{st.session_state.u_index}"
