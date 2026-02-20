@@ -272,6 +272,7 @@ def sync_to_cloud():
     time.sleep(1.0)
     save_bar.empty()
 
+# --- MODIFIED: Start at the first globally unrated sentence ---
 def get_first_unrated_index(unique_list, master_df):
     for idx, sentence in enumerate(unique_list):
         versions = master_df[master_df["incorrect"] == sentence]
@@ -279,8 +280,19 @@ def get_first_unrated_index(unique_list, master_df):
             m_row = versions[versions["id"] == m_id]
             if not m_row.empty:
                 specific_sub_id = str(m_row.index[0] + 2)
-                if get_existing_rating(m_id, specific_sub_id) is None:
+                
+                # Check if ANY user has rated this specific submission
+                df = st.session_state.local_dfs.get(m_id)
+                is_rated_by_anyone = False
+                
+                if df is not None and not df.empty:
+                    # If this submission_id exists anywhere in the dataframe, it means somebody rated it
+                    if (df["submission_id"] == specific_sub_id).any():
+                        is_rated_by_anyone = True
+                        
+                if not is_rated_by_anyone:
                     return idx
+                    
     return len(unique_list)
 
 if "u_index" not in st.session_state:
