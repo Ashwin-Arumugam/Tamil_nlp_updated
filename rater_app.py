@@ -9,7 +9,7 @@ import time
 
 st.set_page_config(page_title="Model Eval Tool", layout="wide")
 
-MASTER_SHEET_GID = 1905633307  # Kept for the master sheet read (if it's the first sheet, it works, but we can use its name if needed)
+MASTER_SHEET_GID = 1905633307 
 
 MODEL_TAB_NAMES = {
     "A": "qwen",
@@ -45,8 +45,7 @@ if "local_dfs" not in st.session_state:
 
 @st.cache_data(show_spinner=False, ttl=600)
 def load_master_data(_conn):
-    # If this fails, try using worksheet="Sheet1" (or whatever your master tab is named)
-    df = _conn.read(worksheet=0, ttl=0) # Reads the very first tab in the spreadsheet
+    df = _conn.read(worksheet=0, ttl=0) 
     if df is None or df.empty:
         st.error("Master sheet is empty or could not be loaded.")
         st.stop()
@@ -94,7 +93,6 @@ def clean_correction_df(df):
     return df[CORRECTION_COLS]
 
 def load_all_tabs_into_variables(_conn):
-    # READ USING THE EXACT TAB NAMES INSTEAD OF GIDs
     for m_id, tab_name in MODEL_TAB_NAMES.items():
         try:
             df = _conn.read(worksheet=tab_name, ttl=0)
@@ -107,7 +105,6 @@ def load_all_tabs_into_variables(_conn):
         df = _conn.read(worksheet="user_corrections", ttl=0)
         st.session_state.local_dfs["corrections"] = clean_correction_df(df)
     except Exception as e:
-        # We don't throw a hard error here in case the tab literally just hasn't been created yet
         st.session_state.local_dfs["corrections"] = pd.DataFrame(columns=CORRECTION_COLS)
 
 if not st.session_state.local_dfs:
@@ -260,9 +257,22 @@ if c1.button("⬅️ Prev") and st.session_state.u_index > 0:
 c2.markdown(f"<center><b>Sentence {st.session_state.u_index + 1} of {len(unique_list)}</b></center>", unsafe_allow_html=True)
 
 if c3.button("Next ➡️"):
-    save_to_local_memory(current_incorrect, versions)
-    st.session_state.u_index += 1
-    st.rerun()
+    # VALIDATION: Check if all present models have a rating
+    all_rated = True
+    for m_id in MODEL_TAB_NAMES.keys():
+        m_row = versions[versions["id"] == m_id]
+        if not m_row.empty:
+            val = st.session_state.get(f"pills_{m_id}_{st.session_state.u_index}")
+            if val is None:
+                all_rated = False
+                break
+                
+    if all_rated:
+        save_to_local_memory(current_incorrect, versions)
+        st.session_state.u_index += 1
+        st.rerun()
+    else:
+        st.error("⚠️ Please rate all displayed models before proceeding to the next sentence.")
 
 st.info(f"**Original:** {current_incorrect}")
 st.divider()
@@ -299,4 +309,3 @@ st.divider()
 general_sub_id = str(versions.index[0] + 2) if not versions.empty else None
 existing_correction = get_existing_correction(general_sub_id) if general_sub_id else ""
 st.text_area("Correction (Optional):", value=existing_correction, key=f"fix_{st.session_state.u_index}")
-st.write(st.session_state.local_dfs)
