@@ -220,7 +220,6 @@ if "u_index" not in st.session_state:
 # =========================================================
 # 4. MAIN UI & LOGOUT HEADER
 # =========================================================
-
 # Top Header Bar for User Info and Logout
 top_c1, top_c2 = st.columns([8, 2])
 with top_c1:
@@ -297,3 +296,4 @@ for row_ids in rows:
 
 st.divider()
 st.text_area("Correction (Optional):", key=f"fix_{st.session_state.u_index}")
+st.write(st.session_state.local_dfs)
