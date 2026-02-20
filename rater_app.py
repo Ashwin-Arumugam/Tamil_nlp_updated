@@ -9,17 +9,7 @@ import time
 
 st.set_page_config(page_title="Model Eval Tool", layout="wide")
 
-MASTER_SHEET_GID = 1905633307
-USER_CORRECTION_GID = 677241304
-
-MODEL_SHEET_GIDS = {
-    "A": 364113859,
-    "B": 952136825,
-    "C": 656105801,
-    "D": 1630302691,
-    "E": 803791042,
-    "F": 141437423,
-}
+MASTER_SHEET_GID = 1905633307  # Kept for the master sheet read (if it's the first sheet, it works, but we can use its name if needed)
 
 MODEL_TAB_NAMES = {
     "A": "qwen",
@@ -55,9 +45,10 @@ if "local_dfs" not in st.session_state:
 
 @st.cache_data(show_spinner=False, ttl=600)
 def load_master_data(_conn):
-    df = _conn.read(worksheet_id=MASTER_SHEET_GID)
+    # If this fails, try using worksheet="Sheet1" (or whatever your master tab is named)
+    df = _conn.read(worksheet=0, ttl=0) # Reads the very first tab in the spreadsheet
     if df is None or df.empty:
-        st.error("Master sheet is empty.")
+        st.error("Master sheet is empty or could not be loaded.")
         st.stop()
     df = df.dropna(how="all")
     unique_sentences = df["incorrect"].unique().tolist()
@@ -74,8 +65,10 @@ def clean_rating_df(df):
         if col not in df.columns:
             df[col] = None
 
-    df["submission_id"] = df["submission_id"].astype(str).str.strip()
+    df["submission_id"] = df["submission_id"].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
     df = df[~df["submission_id"].isin(["", "None", "nan"])]
+    
+    df["user"] = df["user"].astype(str).str.strip()
     
     df["rating"] = pd.to_numeric(df["rating"], errors='coerce')
     df = df.dropna(subset=["rating"])
@@ -94,23 +87,27 @@ def clean_correction_df(df):
         if col not in df.columns:
             df[col] = None
             
-    df["submission_id"] = df["submission_id"].astype(str).str.strip()
+    df["submission_id"] = df["submission_id"].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
     df = df[~df["submission_id"].isin(["", "None", "nan"])]
+    df["user"] = df["user"].astype(str).str.strip()
     
     return df[CORRECTION_COLS]
 
 def load_all_tabs_into_variables(_conn):
-    for m_id, gid in MODEL_SHEET_GIDS.items():
+    # READ USING THE EXACT TAB NAMES INSTEAD OF GIDs
+    for m_id, tab_name in MODEL_TAB_NAMES.items():
         try:
-            df = _conn.read(worksheet_id=gid, ttl=0)
+            df = _conn.read(worksheet=tab_name, ttl=0)
             st.session_state.local_dfs[m_id] = clean_rating_df(df)
-        except Exception:
+        except Exception as e:
+            st.error(f"Error loading tab '{tab_name}': {e}")
             st.session_state.local_dfs[m_id] = pd.DataFrame(columns=RATING_COLS)
 
     try:
-        df = _conn.read(worksheet_id=USER_CORRECTION_GID, ttl=0)
+        df = _conn.read(worksheet="user_corrections", ttl=0)
         st.session_state.local_dfs["corrections"] = clean_correction_df(df)
-    except:
+    except Exception as e:
+        # We don't throw a hard error here in case the tab literally just hasn't been created yet
         st.session_state.local_dfs["corrections"] = pd.DataFrame(columns=CORRECTION_COLS)
 
 if not st.session_state.local_dfs:
@@ -144,6 +141,15 @@ def get_existing_rating(m_id, sub_id):
                 return None
     return None
 
+def get_existing_correction(sub_id):
+    df = st.session_state.local_dfs.get("corrections")
+    if df is not None and not df.empty:
+        mask = (df["submission_id"] == str(sub_id)) & (df["user"] == st.session_state.username)
+        match = df[mask]
+        if not match.empty:
+            return str(match.iloc[0]["user_corrected"])
+    return ""
+
 def update_local_variable(key, new_row_df, sub_id):
     current_df = st.session_state.local_dfs.get(key)
     if current_df is not None and not current_df.empty:
@@ -174,7 +180,7 @@ def save_to_local_memory(current_incorrect, versions):
                 update_local_variable(m_id, new_row, current_model_row_id)
             
     manual_fix_val = st.session_state.get(f"fix_{st.session_state.u_index}")
-    if manual_fix_val:
+    if manual_fix_val and manual_fix_val.strip() != "":
         if not versions.empty:
             general_sub_id = str(versions.index[0] + 2)
             user_row = pd.DataFrame([{
@@ -185,7 +191,6 @@ def save_to_local_memory(current_incorrect, versions):
             update_local_variable("corrections", user_row, general_sub_id)
 
 def sync_to_cloud():
-    # Progress bar now shows on the main page
     save_bar = st.progress(0, text="Syncing to Cloud...")
     model_ids = sorted(MODEL_TAB_NAMES.keys())
     total_tabs = len(model_ids) + 1
@@ -205,7 +210,6 @@ def sync_to_cloud():
                 st.session_state.conn.update(worksheet=tab_name, data=df)
                 time.sleep(1.0) 
             except Exception as e:
-                # Error now shows on the main page
                 st.error(f"Failed to write {tab_name}: {e}")
             
             current_tab += 1
@@ -220,29 +224,24 @@ if "u_index" not in st.session_state:
 # =========================================================
 # 4. MAIN UI & LOGOUT HEADER
 # =========================================================
-# Top Header Bar for User Info and Logout
+
 top_c1, top_c2 = st.columns([8, 2])
 with top_c1:
     st.markdown(f"👤 Logged in as: **{st.session_state.username}**")
 with top_c2:
     if st.button("Logout & Save", type="primary", use_container_width=True):
-        # 1. Catch the current screen's unsaved ratings before logging out
         if st.session_state.u_index < len(unique_list):
             current_incorrect = unique_list[st.session_state.u_index]
             versions = master_df[master_df["incorrect"] == current_incorrect]
             save_to_local_memory(current_incorrect, versions)
         
-        # 2. Push local variables to Google Sheets
         sync_to_cloud()
-        
-        # 3. Clear session and return to login
         st.session_state.clear()
         st.cache_data.clear()
         st.rerun()
 
 st.divider()
 
-# Handle End of List
 if st.session_state.u_index >= len(unique_list):
     st.success("🎉 You've reached the end! Please click **Logout & Save** above to upload your evaluations.")
     st.stop()
@@ -295,5 +294,9 @@ for row_ids in rows:
                 st.warning(f"No data for {MODEL_TAB_NAMES[m_id]}")
 
 st.divider()
-st.text_area("Correction (Optional):", key=f"fix_{st.session_state.u_index}")
+
+# Pre-fill correction box if data exists
+general_sub_id = str(versions.index[0] + 2) if not versions.empty else None
+existing_correction = get_existing_correction(general_sub_id) if general_sub_id else ""
+st.text_area("Correction (Optional):", value=existing_correction, key=f"fix_{st.session_state.u_index}")
 st.write(st.session_state.local_dfs)
