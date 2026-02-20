@@ -8,7 +8,6 @@ import time
 # =========================================================
 
 st.set_page_config(page_title="Model Eval Tool", layout="wide")
-conn = st.connection("gsheets", type=GSheetsConnection)
 
 MASTER_SHEET_GID = 1905633307
 USER_CORRECTION_GID = 677241304
@@ -41,12 +40,15 @@ CORRECTION_COLS = ["submission_id", "user", "user_corrected"]
 # 2. STATE MANAGEMENT & LOADING
 # =========================================================
 
+# Login Logic
 if "username" not in st.session_state:
     st.title("Login")
     with st.form("login"):
         user = st.text_input("Username")
         if st.form_submit_button("Start") and user:
             st.session_state.username = user.strip()
+            # Instantiate connection ONLY after login
+            st.session_state.conn = st.connection("gsheets", type=GSheetsConnection)
             st.cache_data.clear()
             # Clear local variables to force reload
             if "local_dfs" in st.session_state:
@@ -54,13 +56,22 @@ if "username" not in st.session_state:
             st.rerun()
     st.stop()
 
+# Logout Logic (Sidebar)
+with st.sidebar:
+    st.markdown(f"Logged in as: **{st.session_state.username}**")
+    if st.button("Logout", use_container_width=True):
+        st.session_state.clear() # This deletes the 'conn' variable and 'username'
+        st.cache_data.clear()
+        st.rerun()
+
 # Initialize Container for Tab Variables
 if "local_dfs" not in st.session_state:
     st.session_state.local_dfs = {}
 
+# Use _conn so Streamlit's cache ignores the connection object for hashing
 @st.cache_data(show_spinner=False, ttl=600)
-def load_master_data():
-    df = conn.read(worksheet_id=MASTER_SHEET_GID)
+def load_master_data(_conn):
+    df = _conn.read(worksheet_id=MASTER_SHEET_GID)
     if df is None or df.empty:
         st.error("Master sheet is empty.")
         st.stop()
@@ -85,7 +96,7 @@ def clean_rating_df(df):
     # Filter to strict columns
     return df[RATING_COLS]
 
-def load_all_tabs_into_variables():
+def load_all_tabs_into_variables(_conn):
     """
     Loads all tabs into memory. 
     If a tab is empty, initializes it with empty schema.
@@ -93,7 +104,7 @@ def load_all_tabs_into_variables():
     # 1. Load Model Rating Tabs
     for m_id, gid in MODEL_SHEET_GIDS.items():
         try:
-            df = conn.read(worksheet_id=gid, ttl=0)
+            df = _conn.read(worksheet_id=gid, ttl=0)
             if df is None or df.empty:
                 # Initialize EMPTY with headers
                 st.session_state.local_dfs[m_id] = pd.DataFrame(columns=RATING_COLS)
@@ -106,7 +117,7 @@ def load_all_tabs_into_variables():
 
     # 2. Load User Corrections Tab
     try:
-        df = conn.read(worksheet_id=USER_CORRECTION_GID, ttl=0)
+        df = _conn.read(worksheet_id=USER_CORRECTION_GID, ttl=0)
         if df is None or df.empty:
             st.session_state.local_dfs["corrections"] = pd.DataFrame(columns=CORRECTION_COLS)
         else:
@@ -121,10 +132,12 @@ def load_all_tabs_into_variables():
 # Trigger Load on First Run
 if not st.session_state.local_dfs:
     with st.spinner("Initializing variables from cloud..."):
-        load_master_data()
-        load_all_tabs_into_variables()
+        # Pass the session_state connection
+        load_master_data(st.session_state.conn)
+        load_all_tabs_into_variables(st.session_state.conn)
 
-master_df, unique_list = load_master_data()
+# Pass the session_state connection
+master_df, unique_list = load_master_data(st.session_state.conn)
 
 # =========================================================
 # 3. HELPER FUNCTIONS
@@ -301,7 +314,8 @@ if st.button("Save Ratings", type="primary", use_container_width=True):
             save_bar.progress((current_tab / total_tabs), text=f"Writing {tab_name}...")
             
             try:
-                conn.update(worksheet=tab_name, data=df)
+                # Use the session_state connection to update
+                st.session_state.conn.update(worksheet=tab_name, data=df)
                 time.sleep(1.0) # Pause for API stability
             except Exception as e:
                 st.error(f"Failed to write {tab_name}: {e}")
