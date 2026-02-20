@@ -12,7 +12,6 @@ st.set_page_config(page_title="Model Eval Tool", layout="wide")
 MASTER_SHEET_GID = 1905633307
 USER_CORRECTION_GID = 677241304
 
-# Maps Model IDs to Sheet GIDs
 MODEL_SHEET_GIDS = {
     "A": 364113859,
     "B": 952136825,
@@ -22,7 +21,6 @@ MODEL_SHEET_GIDS = {
     "F": 141437423,
 }
 
-# Maps Model IDs to Tab Names
 MODEL_TAB_NAMES = {
     "A": "qwen",
     "B": "nemotron",
@@ -32,7 +30,6 @@ MODEL_TAB_NAMES = {
     "F": "gemma"
 }
 
-# STRICT SCHEMAS
 RATING_COLS = ["submission_id", "user", "rating"]
 CORRECTION_COLS = ["submission_id", "user", "user_corrected"]
 
@@ -40,31 +37,19 @@ CORRECTION_COLS = ["submission_id", "user", "user_corrected"]
 # 2. STATE MANAGEMENT & LOADING
 # =========================================================
 
-# Login Logic
 if "username" not in st.session_state:
     st.title("Login")
     with st.form("login"):
         user = st.text_input("Username")
         if st.form_submit_button("Start") and user:
             st.session_state.username = user.strip()
-            # Instantiate connection ONLY after login
             st.session_state.conn = st.connection("gsheets", type=GSheetsConnection)
             st.cache_data.clear()
-            # Clear local variables to force reload
             if "local_dfs" in st.session_state:
                 del st.session_state.local_dfs
             st.rerun()
     st.stop()
 
-# Logout Logic (Sidebar)
-with st.sidebar:
-    st.markdown(f"Logged in as: **{st.session_state.username}**")
-    if st.button("Logout", use_container_width=True):
-        st.session_state.clear()
-        st.cache_data.clear()
-        st.rerun()
-
-# Initialize Container for Tab Variables
 if "local_dfs" not in st.session_state:
     st.session_state.local_dfs = {}
 
@@ -79,28 +64,16 @@ def load_master_data(_conn):
     return df, unique_sentences
 
 def clean_rating_df(df):
-    """Ensures types are safe for appending."""
     if df is None or df.empty:
         return pd.DataFrame(columns=RATING_COLS)
-    
-    # Ensure columns exist
     for col in RATING_COLS:
         if col not in df.columns:
             df[col] = None
-            
-    # Clean Types
     df["submission_id"] = df["submission_id"].astype(str)
     df["rating"] = pd.to_numeric(df["rating"], errors='coerce').fillna(0).astype(int)
-    
-    # Filter to strict columns
     return df[RATING_COLS]
 
 def load_all_tabs_into_variables(_conn):
-    """
-    Loads all tabs into memory. 
-    If a tab is empty, initializes it with empty schema.
-    """
-    # 1. Load Model Rating Tabs
     for m_id, gid in MODEL_SHEET_GIDS.items():
         try:
             df = _conn.read(worksheet_id=gid, ttl=0)
@@ -111,7 +84,6 @@ def load_all_tabs_into_variables(_conn):
         except Exception:
             st.session_state.local_dfs[m_id] = pd.DataFrame(columns=RATING_COLS)
 
-    # 2. Load User Corrections Tab
     try:
         df = _conn.read(worksheet_id=USER_CORRECTION_GID, ttl=0)
         if df is None or df.empty:
@@ -124,7 +96,6 @@ def load_all_tabs_into_variables(_conn):
     except:
         st.session_state.local_dfs["corrections"] = pd.DataFrame(columns=CORRECTION_COLS)
 
-# Trigger Load on First Run
 if not st.session_state.local_dfs:
     with st.spinner("Initializing variables from cloud..."):
         load_master_data(st.session_state.conn)
@@ -171,11 +142,9 @@ def update_local_variable(key, new_row_df, sub_id):
     updated_df = pd.concat([new_row_df, current_df], ignore_index=True)
     st.session_state.local_dfs[key] = updated_df
 
-def save_current_ratings(model_ids, current_incorrect, versions):
-    """Pulls current widget states and saves to cloud."""
-    save_bar = st.progress(0, text="Updating local variables...")
-    
-    # 1. Update LOCAL Variables
+def save_to_local_memory(current_incorrect, versions):
+    """Pulls current widget states and saves to memory ONLY."""
+    model_ids = sorted(MODEL_TAB_NAMES.keys())
     for m_id in model_ids:
         val = st.session_state.get(f"pills_{m_id}_{st.session_state.u_index}")
         if val is not None:
@@ -199,7 +168,10 @@ def save_current_ratings(model_ids, current_incorrect, versions):
             }])
             update_local_variable("corrections", user_row, general_sub_id)
 
-    # 2. Write Variables to Cloud
+def sync_to_cloud():
+    """Writes all local_dfs to Google Sheets."""
+    save_bar = st.sidebar.progress(0, text="Syncing to Cloud...")
+    model_ids = sorted(MODEL_TAB_NAMES.keys())
     total_tabs = len(model_ids) + 1
     current_tab = 0
     
@@ -212,35 +184,69 @@ def save_current_ratings(model_ids, current_incorrect, versions):
             else:
                 continue 
             
-            save_bar.progress((current_tab / total_tabs), text=f"Writing {tab_name} to cloud...")
+            save_bar.progress((current_tab / total_tabs), text=f"Writing {tab_name}...")
             try:
                 st.session_state.conn.update(worksheet=tab_name, data=df)
                 time.sleep(1.0) 
             except Exception as e:
-                st.error(f"Failed to write {tab_name}: {e}")
+                st.sidebar.error(f"Failed to write {tab_name}: {e}")
             
             current_tab += 1
 
-    save_bar.progress(1.0, text="Done!")
-    time.sleep(0.5)
+    save_bar.progress(1.0, text="Sync Complete!")
+    time.sleep(1.0)
     save_bar.empty()
-
-# =========================================================
-# 4. UI
-# =========================================================
 
 if "u_index" not in st.session_state:
     st.session_state.u_index = 0
 
-if st.session_state.u_index >= len(unique_list):
-    st.success("All done! Thank you for completing the evaluations.")
-    if st.button("Restart"):
-        st.session_state.u_index = 0
+# =========================================================
+# 4. SIDEBAR LOGIC
+# =========================================================
+
+with st.sidebar:
+    st.markdown(f"Logged in as: **{st.session_state.username}**")
+    if st.button("Logout & Save", type="primary", use_container_width=True):
+        # 1. Catch the current screen's unsaved ratings before logging out
+        if st.session_state.u_index < len(unique_list):
+            current_incorrect = unique_list[st.session_state.u_index]
+            versions = master_df[master_df["incorrect"] == current_incorrect]
+            save_to_local_memory(current_incorrect, versions)
+        
+        # 2. Push local variables to Google Sheets
+        sync_to_cloud()
+        
+        # 3. Clear session and return to login
+        st.session_state.clear()
+        st.cache_data.clear()
         st.rerun()
+
+# =========================================================
+# 5. UI
+# =========================================================
+
+# Handle End of List
+if st.session_state.u_index >= len(unique_list):
+    st.success("🎉 You've reached the end! Please click **Logout & Save** in the sidebar to upload your evaluations.")
     st.stop()
 
 current_incorrect = unique_list[st.session_state.u_index]
 versions = master_df[master_df["incorrect"] == current_incorrect]
+
+# --- Navigation (Top) ---
+c1, c2, c3 = st.columns([1, 6, 1])
+
+if c1.button("⬅️ Prev") and st.session_state.u_index > 0:
+    save_to_local_memory(current_incorrect, versions)
+    st.session_state.u_index -= 1
+    st.rerun()
+    
+c2.markdown(f"<center><b>Sentence {st.session_state.u_index + 1} of {len(unique_list)}</b></center>", unsafe_allow_html=True)
+
+if c3.button("Next ➡️"):
+    save_to_local_memory(current_incorrect, versions)
+    st.session_state.u_index += 1
+    st.rerun()
 
 st.info(f"**Original:** {current_incorrect}")
 st.divider()
@@ -272,24 +278,4 @@ for row_ids in rows:
                 st.warning(f"No data for {MODEL_TAB_NAMES[m_id]}")
 
 st.divider()
-# Use a key to store the text area state; we read it during the save process
 st.text_area("Correction (Optional):", key=f"fix_{st.session_state.u_index}")
-
-st.divider()
-
-# --- Integrated Navigation & Save ---
-c1, c2, c3 = st.columns([1, 6, 1])
-
-if c1.button("⬅️ Prev") and st.session_state.u_index > 0:
-    st.session_state.u_index -= 1
-    st.rerun()
-    
-c2.markdown(f"<center><b>Sentence {st.session_state.u_index + 1} of {len(unique_list)}</b></center>", unsafe_allow_html=True)
-
-is_last_sentence = st.session_state.u_index == len(unique_list) - 1
-next_button_label = "Finish & Save" if is_last_sentence else "Next & Save ➡️"
-
-if c3.button(next_button_label, type="primary"):
-    save_current_ratings(model_ids, current_incorrect, versions)
-    st.session_state.u_index += 1
-    st.rerun()
