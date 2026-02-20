@@ -162,6 +162,20 @@ def get_model_specific_row_id(master_df, current_incorrect, model_id):
         return str(subset.index[0] + 2) 
     return None
 
+def get_all_previous_ratings(m_id, sub_id):
+    """Fetches ratings from all users for a specific submission."""
+    df = st.session_state.local_dfs.get(m_id)
+    if df is not None and not df.empty:
+        mask = (df["submission_id"] == str(sub_id))
+        match = df[mask]
+        if not match.empty:
+            # Drop any rows where rating somehow became NaN during live session
+            valid_matches = match[pd.to_numeric(match['rating'], errors='coerce').notnull()]
+            if not valid_matches.empty:
+                ratings = [f"{row['user']} ({int(row['rating'])})" for _, row in valid_matches.iterrows()]
+                return ", ".join(ratings)
+    return ""
+
 def get_existing_rating(m_id, sub_id):
     df = st.session_state.local_dfs.get(m_id)
     if df is not None and not df.empty:
@@ -183,7 +197,6 @@ def get_existing_reason(m_id, sub_id):
         if not match.empty:
             reason_str = str(match.iloc[0]["reason"])
             if reason_str and reason_str not in ["nan", "None", ""]:
-                # Convert comma-separated string back to a list
                 return [r.strip() for r in reason_str.split(",") if r.strip() in REASON_OPTIONS]
     return []
 
@@ -218,11 +231,8 @@ def save_to_local_memory(current_incorrect, versions):
         if val is not None:
             current_model_row_id = get_model_specific_row_id(master_df, current_incorrect, m_id)
             if current_model_row_id:
-                # Retrieve the selected reasons if rating <= 7
                 reason_key = f"reason_{m_id}_{st.session_state.u_index}"
                 reason_list = st.session_state.get(reason_key, [])
-                
-                # If rating > 7, we don't save a reason even if one was previously selected
                 reason_str = ", ".join(reason_list) if (val <= 7 and reason_list) else ""
                 
                 new_row = pd.DataFrame([{
@@ -272,7 +282,6 @@ def sync_to_cloud():
     time.sleep(1.0)
     save_bar.empty()
 
-# --- MODIFIED: Start at the first globally unrated sentence ---
 def get_first_unrated_index(unique_list, master_df):
     for idx, sentence in enumerate(unique_list):
         versions = master_df[master_df["incorrect"] == sentence]
@@ -281,12 +290,10 @@ def get_first_unrated_index(unique_list, master_df):
             if not m_row.empty:
                 specific_sub_id = str(m_row.index[0] + 2)
                 
-                # Check if ANY user has rated this specific submission
                 df = st.session_state.local_dfs.get(m_id)
                 is_rated_by_anyone = False
                 
                 if df is not None and not df.empty:
-                    # If this submission_id exists anywhere in the dataframe, it means somebody rated it
                     if (df["submission_id"] == specific_sub_id).any():
                         is_rated_by_anyone = True
                         
@@ -349,16 +356,19 @@ for row_idx, row_ids in enumerate(rows):
                 st.markdown(f"**{m_id}** <span style='color:red'>*</span>", unsafe_allow_html=True)
                 st.success(m_row.iloc[0]["corrected"])
                 
+                # --- Show all previous ratings to the user ---
+                all_prev_ratings = get_all_previous_ratings(m_id, specific_sub_id)
+                if all_prev_ratings:
+                    st.caption(f"**Previous Ratings:** {all_prev_ratings}")
+                
                 key = f"pills_{m_id}_{st.session_state.u_index}"
                 if key not in st.session_state:
                     saved_val = get_existing_rating(m_id, specific_sub_id)
                     if saved_val:
                         st.session_state[key] = saved_val
                 
-                # We save the selected pill to a variable to conditionally show the dropdown
                 selected_rating = st.pills("Rate", rating_options, key=key, label_visibility="collapsed")
                 
-                # Conditional Reason Dropdown for ratings <= 7
                 if selected_rating is not None and selected_rating <= 7:
                     reason_key = f"reason_{m_id}_{st.session_state.u_index}"
                     
@@ -374,7 +384,6 @@ for row_idx, row_ids in enumerate(rows):
             else:
                 st.warning(f"No data for {m_id}")
                 
-    # Buffer space between the two rows so layout stays clean
     if row_idx < len(rows) - 1:
         st.markdown("<br><br>", unsafe_allow_html=True)
 
@@ -396,7 +405,6 @@ with b_c1:
         st.session_state.u_index -= 1
         st.rerun()
 
-# The middle column is left empty to push the buttons to the corners
 with b_c2:
     pass
 
