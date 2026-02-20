@@ -9,19 +9,30 @@ import time
 
 st.set_page_config(page_title="Model Eval Tool", layout="wide")
 
-# CSS to force pills onto a single line and reduce spacing
+# Aggressive CSS to force pills onto a single line
 st.markdown(
     """
     <style>
-    /* Target the pills container to prevent wrapping and reduce gap */
+    /* Force the flex container to never wrap */
     div[data-testid="stPills"] > div {
         flex-wrap: nowrap !important;
-        gap: 3px !important;
-        overflow-x: auto; /* Adds a tiny scrollbar ONLY if the screen is super small */
+        gap: 2px !important; 
+        overflow-x: auto !important; 
+        padding-bottom: 4px; 
     }
-    /* Reduce the padding inside the pills to help them fit */
+    
+    /* Shrink the individual pill buttons */
     div[data-testid="stPills"] button {
-        padding: 2px 8px !important;
+        padding: 2px 6px !important; 
+        min-width: 30px !important; 
+        min-height: 32px !important;
+        font-size: 14px !important;
+    }
+    
+    /* Remove any extra internal padding Streamlit adds to the text */
+    div[data-testid="stPills"] button p {
+        margin: 0px !important;
+        padding: 0px !important;
     }
     </style>
     """,
@@ -39,8 +50,11 @@ MODEL_TAB_NAMES = {
     "F": "gemma"
 }
 
-RATING_COLS = ["submission_id", "user", "rating"]
+# Added 'reason' to the rating columns schema
+RATING_COLS = ["submission_id", "user", "rating", "reason"]
 CORRECTION_COLS = ["submission_id", "user", "user_corrected"]
+
+REASON_OPTIONS = ["spelling error", "not fluent enough", "grammar error"]
 
 # =========================================================
 # 2. STATE MANAGEMENT & LOADING
@@ -91,6 +105,10 @@ def clean_rating_df(df):
     df["rating"] = pd.to_numeric(df["rating"], errors='coerce')
     df = df.dropna(subset=["rating"])
     df["rating"] = df["rating"].astype(int)
+    
+    # Clean the reason column
+    df["reason"] = df["reason"].fillna("").astype(str)
+    df["reason"] = df["reason"].replace(["nan", "None"], "")
     
     return df[RATING_COLS]
 
@@ -157,6 +175,18 @@ def get_existing_rating(m_id, sub_id):
                 return None
     return None
 
+def get_existing_reason(m_id, sub_id):
+    df = st.session_state.local_dfs.get(m_id)
+    if df is not None and not df.empty:
+        mask = (df["submission_id"] == str(sub_id)) & (df["user"] == st.session_state.username)
+        match = df[mask]
+        if not match.empty:
+            reason_str = str(match.iloc[0]["reason"])
+            if reason_str and reason_str not in ["nan", "None", ""]:
+                # Convert comma-separated string back to a list
+                return [r.strip() for r in reason_str.split(",") if r.strip() in REASON_OPTIONS]
+    return []
+
 def get_existing_correction(sub_id):
     df = st.session_state.local_dfs.get("corrections")
     if df is not None and not df.empty:
@@ -188,10 +218,18 @@ def save_to_local_memory(current_incorrect, versions):
         if val is not None:
             current_model_row_id = get_model_specific_row_id(master_df, current_incorrect, m_id)
             if current_model_row_id:
+                # Retrieve the selected reasons if rating <= 7
+                reason_key = f"reason_{m_id}_{st.session_state.u_index}"
+                reason_list = st.session_state.get(reason_key, [])
+                
+                # If rating > 7, we don't save a reason even if one was previously selected
+                reason_str = ", ".join(reason_list) if (val <= 7 and reason_list) else ""
+                
                 new_row = pd.DataFrame([{
                     "submission_id": str(current_model_row_id),
                     "user": str(st.session_state.username),
-                    "rating": int(val)
+                    "rating": int(val),
+                    "reason": reason_str
                 }])
                 update_local_variable(m_id, new_row, current_model_row_id)
             
@@ -311,7 +349,7 @@ model_ids = sorted(MODEL_TAB_NAMES.keys())
 rating_options = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 rows = [model_ids[:3], model_ids[3:]]
-for row_ids in rows:
+for row_idx, row_ids in enumerate(rows):
     cols = st.columns(3)
     for i, m_id in enumerate(row_ids):
         with cols[i]:
@@ -328,9 +366,28 @@ for row_ids in rows:
                     if saved_val:
                         st.session_state[key] = saved_val
                 
-                st.pills("Rate", rating_options, key=key, label_visibility="collapsed")
+                # We save the selected pill to a variable to conditionally show the dropdown
+                selected_rating = st.pills("Rate", rating_options, key=key, label_visibility="collapsed")
+                
+                # Conditional Reason Dropdown for ratings <= 7
+                if selected_rating is not None and selected_rating <= 7:
+                    reason_key = f"reason_{m_id}_{st.session_state.u_index}"
+                    
+                    if reason_key not in st.session_state:
+                        saved_reason = get_existing_reason(m_id, specific_sub_id)
+                        st.session_state[reason_key] = saved_reason
+                        
+                    st.multiselect(
+                        "Why this rating?", 
+                        options=REASON_OPTIONS,
+                        key=reason_key
+                    )
             else:
                 st.warning(f"No data for {MODEL_TAB_NAMES[m_id]}")
+                
+    # Buffer space between the two rows so layout stays clean
+    if row_idx < len(rows) - 1:
+        st.markdown("<br><br>", unsafe_allow_html=True)
 
 st.divider()
 
