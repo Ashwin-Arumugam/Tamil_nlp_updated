@@ -66,33 +66,50 @@ def load_master_data(_conn):
 def clean_rating_df(df):
     if df is None or df.empty:
         return pd.DataFrame(columns=RATING_COLS)
+    
+    if "submission_id" in df.columns:
+        df = df.dropna(subset=["submission_id"])
+        
     for col in RATING_COLS:
         if col not in df.columns:
             df[col] = None
-    df["submission_id"] = df["submission_id"].astype(str)
-    df["rating"] = pd.to_numeric(df["rating"], errors='coerce').fillna(0).astype(int)
+
+    df["submission_id"] = df["submission_id"].astype(str).str.strip()
+    df = df[~df["submission_id"].isin(["", "None", "nan"])]
+    
+    df["rating"] = pd.to_numeric(df["rating"], errors='coerce')
+    df = df.dropna(subset=["rating"])
+    df["rating"] = df["rating"].astype(int)
+    
     return df[RATING_COLS]
+
+def clean_correction_df(df):
+    if df is None or df.empty:
+        return pd.DataFrame(columns=CORRECTION_COLS)
+        
+    if "submission_id" in df.columns:
+        df = df.dropna(subset=["submission_id"])
+        
+    for col in CORRECTION_COLS:
+        if col not in df.columns:
+            df[col] = None
+            
+    df["submission_id"] = df["submission_id"].astype(str).str.strip()
+    df = df[~df["submission_id"].isin(["", "None", "nan"])]
+    
+    return df[CORRECTION_COLS]
 
 def load_all_tabs_into_variables(_conn):
     for m_id, gid in MODEL_SHEET_GIDS.items():
         try:
             df = _conn.read(worksheet_id=gid, ttl=0)
-            if df is None or df.empty:
-                st.session_state.local_dfs[m_id] = pd.DataFrame(columns=RATING_COLS)
-            else:
-                st.session_state.local_dfs[m_id] = clean_rating_df(df)
+            st.session_state.local_dfs[m_id] = clean_rating_df(df)
         except Exception:
             st.session_state.local_dfs[m_id] = pd.DataFrame(columns=RATING_COLS)
 
     try:
         df = _conn.read(worksheet_id=USER_CORRECTION_GID, ttl=0)
-        if df is None or df.empty:
-            st.session_state.local_dfs["corrections"] = pd.DataFrame(columns=CORRECTION_COLS)
-        else:
-            if "submission_id" in df.columns:
-                df["submission_id"] = df["submission_id"].astype(str)
-            valid_cols = [c for c in CORRECTION_COLS if c in df.columns]
-            st.session_state.local_dfs["corrections"] = df[valid_cols]
+        st.session_state.local_dfs["corrections"] = clean_correction_df(df)
     except:
         st.session_state.local_dfs["corrections"] = pd.DataFrame(columns=CORRECTION_COLS)
 
@@ -143,7 +160,6 @@ def update_local_variable(key, new_row_df, sub_id):
     st.session_state.local_dfs[key] = updated_df
 
 def save_to_local_memory(current_incorrect, versions):
-    """Pulls current widget states and saves to memory ONLY."""
     model_ids = sorted(MODEL_TAB_NAMES.keys())
     for m_id in model_ids:
         val = st.session_state.get(f"pills_{m_id}_{st.session_state.u_index}")
@@ -169,8 +185,8 @@ def save_to_local_memory(current_incorrect, versions):
             update_local_variable("corrections", user_row, general_sub_id)
 
 def sync_to_cloud():
-    """Writes all local_dfs to Google Sheets."""
-    save_bar = st.sidebar.progress(0, text="Syncing to Cloud...")
+    # Progress bar now shows on the main page
+    save_bar = st.progress(0, text="Syncing to Cloud...")
     model_ids = sorted(MODEL_TAB_NAMES.keys())
     total_tabs = len(model_ids) + 1
     current_tab = 0
@@ -189,7 +205,8 @@ def sync_to_cloud():
                 st.session_state.conn.update(worksheet=tab_name, data=df)
                 time.sleep(1.0) 
             except Exception as e:
-                st.sidebar.error(f"Failed to write {tab_name}: {e}")
+                # Error now shows on the main page
+                st.error(f"Failed to write {tab_name}: {e}")
             
             current_tab += 1
 
@@ -201,11 +218,14 @@ if "u_index" not in st.session_state:
     st.session_state.u_index = 0
 
 # =========================================================
-# 4. SIDEBAR LOGIC
+# 4. MAIN UI & LOGOUT HEADER
 # =========================================================
 
-with st.sidebar:
-    st.markdown(f"Logged in as: **{st.session_state.username}**")
+# Top Header Bar for User Info and Logout
+top_c1, top_c2 = st.columns([8, 2])
+with top_c1:
+    st.markdown(f"👤 Logged in as: **{st.session_state.username}**")
+with top_c2:
     if st.button("Logout & Save", type="primary", use_container_width=True):
         # 1. Catch the current screen's unsaved ratings before logging out
         if st.session_state.u_index < len(unique_list):
@@ -221,13 +241,11 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-# =========================================================
-# 5. UI
-# =========================================================
+st.divider()
 
 # Handle End of List
 if st.session_state.u_index >= len(unique_list):
-    st.success("🎉 You've reached the end! Please click **Logout & Save** in the sidebar to upload your evaluations.")
+    st.success("🎉 You've reached the end! Please click **Logout & Save** above to upload your evaluations.")
     st.stop()
 
 current_incorrect = unique_list[st.session_state.u_index]
