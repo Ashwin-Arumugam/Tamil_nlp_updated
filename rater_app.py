@@ -314,33 +314,6 @@ if st.session_state.u_index >= len(unique_list):
 current_incorrect = unique_list[st.session_state.u_index]
 versions = master_df[master_df["incorrect"] == current_incorrect]
 
-# --- Navigation (Top) ---
-c1, c2, c3 = st.columns([1, 6, 1])
-
-if c1.button("⬅️ Prev") and st.session_state.u_index > 0:
-    save_to_local_memory(current_incorrect, versions)
-    st.session_state.u_index -= 1
-    st.rerun()
-    
-c2.markdown(f"<center><b>Sentence {st.session_state.u_index + 1} of {len(unique_list)}</b></center>", unsafe_allow_html=True)
-
-if c3.button("Next ➡️"):
-    all_rated = True
-    for m_id in MODEL_TAB_NAMES.keys():
-        m_row = versions[versions["id"] == m_id]
-        if not m_row.empty:
-            val = st.session_state.get(f"pills_{m_id}_{st.session_state.u_index}")
-            if val is None:
-                all_rated = False
-                break
-                
-    if all_rated:
-        save_to_local_memory(current_incorrect, versions)
-        st.session_state.u_index += 1
-        st.rerun()
-    else:
-        st.toast("⚠️ Please rate all displayed models before proceeding to the next sentence.", icon="🚨")
-
 st.info(f"**Original:** {current_incorrect}")
 st.divider()
 
@@ -395,3 +368,35 @@ st.divider()
 general_sub_id = str(versions.index[0] + 2) if not versions.empty else None
 existing_correction = get_existing_correction(general_sub_id) if general_sub_id else ""
 st.text_area("Correction (Optional):", value=existing_correction, key=f"fix_{st.session_state.u_index}")
+
+st.divider()
+
+# --- Navigation (Bottom) ---
+b_c1, b_c2, b_c3 = st.columns([1, 8, 1])
+
+with b_c1:
+    if st.button("⬅️ Prev", use_container_width=True) and st.session_state.u_index > 0:
+        save_to_local_memory(current_incorrect, versions)
+        st.session_state.u_index -= 1
+        st.rerun()
+        
+with b_c2:
+    st.markdown(f"<center><b>Sentence {st.session_state.u_index + 1} of {len(unique_list)}</b></center>", unsafe_allow_html=True)
+
+with b_c3:
+    if st.button("Next ➡️", use_container_width=True):
+        all_rated = True
+        for m_id in MODEL_TAB_NAMES.keys():
+            m_row = versions[versions["id"] == m_id]
+            if not m_row.empty:
+                val = st.session_state.get(f"pills_{m_id}_{st.session_state.u_index}")
+                if val is None:
+                    all_rated = False
+                    break
+                    
+        if all_rated:
+            save_to_local_memory(current_incorrect, versions)
+            st.session_state.u_index += 1
+            st.rerun()
+        else:
+            st.toast("⚠️ Please rate all displayed models before proceeding to the next sentence.", icon="🚨")
