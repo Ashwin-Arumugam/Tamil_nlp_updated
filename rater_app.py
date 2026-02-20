@@ -169,7 +169,6 @@ def get_all_previous_ratings(m_id, sub_id):
         mask = (df["submission_id"] == str(sub_id))
         match = df[mask]
         if not match.empty:
-            # Drop any rows where rating somehow became NaN during live session
             valid_matches = match[pd.to_numeric(match['rating'], errors='coerce').notnull()]
             if not valid_matches.empty:
                 ratings = [f"{row['user']} ({int(row['rating'])})" for _, row in valid_matches.iterrows()]
@@ -226,6 +225,21 @@ def update_local_variable(key, new_row_df, sub_id):
 
 def save_to_local_memory(current_incorrect, versions):
     model_ids = sorted(MODEL_TAB_NAMES.keys())
+    
+    # Check if the sentence has already been rated by anyone
+    is_sentence_locked = False
+    for m_id in model_ids:
+        m_row = versions[versions["id"] == m_id]
+        if not m_row.empty:
+            specific_sub_id = str(m_row.index[0] + 2)
+            if get_all_previous_ratings(m_id, specific_sub_id):
+                is_sentence_locked = True
+                break
+                
+    # If it's already locked, skip saving entirely
+    if is_sentence_locked:
+        return
+
     for m_id in model_ids:
         val = st.session_state.get(f"pills_{m_id}_{st.session_state.u_index}")
         if val is not None:
@@ -333,8 +347,20 @@ if st.session_state.u_index >= len(unique_list):
 current_incorrect = unique_list[st.session_state.u_index]
 versions = master_df[master_df["incorrect"] == current_incorrect]
 
+# Check if sentence is fully locked because of previous ratings
+is_sentence_rated = False
+for m_id in MODEL_TAB_NAMES.keys():
+    m_row = versions[versions["id"] == m_id]
+    if not m_row.empty:
+        if get_all_previous_ratings(m_id, str(m_row.index[0] + 2)):
+            is_sentence_rated = True
+            break
+
 # Sentence Counter at the top
 st.markdown(f"<center><h4>Sentence {st.session_state.u_index + 1} of {len(unique_list)}</h4></center>", unsafe_allow_html=True)
+
+if is_sentence_rated:
+    st.info("ℹ️ **This sentence has already been rated.** Inputs are locked, but you can skip to the next one using the Next button.")
 
 st.info(f"**Original:** {current_incorrect}")
 st.divider()
@@ -356,8 +382,9 @@ for row_idx, row_ids in enumerate(rows):
                 st.markdown(f"**{m_id}** <span style='color:red'>*</span>", unsafe_allow_html=True)
                 st.success(m_row.iloc[0]["corrected"])
                 
-                # --- Show all previous ratings to the user ---
                 all_prev_ratings = get_all_previous_ratings(m_id, specific_sub_id)
+                is_locked = bool(all_prev_ratings)
+                
                 if all_prev_ratings:
                     st.caption(f"**Previous Ratings:** {all_prev_ratings}")
                 
@@ -367,7 +394,8 @@ for row_idx, row_ids in enumerate(rows):
                     if saved_val:
                         st.session_state[key] = saved_val
                 
-                selected_rating = st.pills("Rate", rating_options, key=key, label_visibility="collapsed")
+                # Lock the pills if it's already rated
+                selected_rating = st.pills("Rate", rating_options, key=key, label_visibility="collapsed", disabled=is_locked)
                 
                 if selected_rating is not None and selected_rating <= 7:
                     reason_key = f"reason_{m_id}_{st.session_state.u_index}"
@@ -375,11 +403,13 @@ for row_idx, row_ids in enumerate(rows):
                     if reason_key not in st.session_state:
                         saved_reason = get_existing_reason(m_id, specific_sub_id)
                         st.session_state[reason_key] = saved_reason
-                        
+                    
+                    # Lock the multiselect if already rated
                     st.multiselect(
                         "Why this rating?", 
                         options=REASON_OPTIONS,
-                        key=reason_key
+                        key=reason_key,
+                        disabled=is_locked
                     )
             else:
                 st.warning(f"No data for {m_id}")
@@ -389,10 +419,10 @@ for row_idx, row_ids in enumerate(rows):
 
 st.divider()
 
-# Pre-fill correction box if data exists
+# Pre-fill correction box if data exists, lock it if sentence is rated
 general_sub_id = str(versions.index[0] + 2) if not versions.empty else None
 existing_correction = get_existing_correction(general_sub_id) if general_sub_id else ""
-st.text_area("Correction (Optional):", value=existing_correction, key=f"fix_{st.session_state.u_index}")
+st.text_area("Correction (Optional):", value=existing_correction, key=f"fix_{st.session_state.u_index}", disabled=is_sentence_rated)
 
 st.divider()
 
@@ -414,6 +444,12 @@ with b_c3:
         for m_id in MODEL_TAB_NAMES.keys():
             m_row = versions[versions["id"] == m_id]
             if not m_row.empty:
+                specific_sub_id = str(m_row.index[0] + 2)
+                
+                # Bypass the mandatory rating check if it has already been rated
+                if get_all_previous_ratings(m_id, specific_sub_id):
+                    continue
+                    
                 val = st.session_state.get(f"pills_{m_id}_{st.session_state.u_index}")
                 if val is None:
                     all_rated = False
