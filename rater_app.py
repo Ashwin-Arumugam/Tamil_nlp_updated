@@ -50,7 +50,6 @@ MODEL_TAB_NAMES = {
     "F": "gemma"
 }
 
-# Added 'reason' to the rating columns schema
 RATING_COLS = ["submission_id", "user", "rating", "reason"]
 CORRECTION_COLS = ["submission_id", "user", "user_corrected"]
 
@@ -173,13 +172,23 @@ def get_all_previous_ratings(m_id, sub_id):
                 return ", ".join(ratings)
     return ""
 
-def is_rated_by_other_user(m_id, sub_id):
-    """Checks if ANY user OTHER THAN the current user has rated this model."""
+def is_locked_for_user(m_id, sub_id, username):
+    """
+    Returns True if 2 or more OTHER users have already rated this sentence.
+    Returns False if the current user has already rated it (allowing edits) 
+    or if it has fewer than 2 ratings.
+    """
     df = st.session_state.local_dfs.get(m_id)
     if df is not None and not df.empty:
-        mask = (df["submission_id"] == str(sub_id)) & (df["user"] != st.session_state.username)
+        mask = (df["submission_id"] == str(sub_id))
         match = df[mask]
-        return not match.empty
+        
+        if not match.empty:
+            raters = match["user"].unique().tolist()
+            if username in raters:
+                return False  # User can edit their own rating
+            elif len(raters) >= 2:
+                return True   # Max 2 ratings reached by others, locked!
     return False
 
 def get_existing_rating(m_id, sub_id):
@@ -233,17 +242,17 @@ def update_local_variable(key, new_row_df, sub_id):
 def save_to_local_memory(current_incorrect, versions):
     model_ids = sorted(MODEL_TAB_NAMES.keys())
     
-    # Only skip saving if another user has locked this sentence
-    is_locked_by_other = False
+    # Only skip saving if the sentence has reached max 2 ratings from OTHER users
+    is_locked_by_others = False
     for m_id in model_ids:
         m_row = versions[versions["id"] == m_id]
         if not m_row.empty:
             specific_sub_id = str(m_row.index[0] + 2)
-            if is_rated_by_other_user(m_id, specific_sub_id):
-                is_locked_by_other = True
+            if is_locked_for_user(m_id, specific_sub_id, st.session_state.username):
+                is_locked_by_others = True
                 break
                 
-    if is_locked_by_other:
+    if is_locked_by_others:
         return
 
     for m_id in model_ids:
@@ -305,21 +314,33 @@ def sync_to_cloud():
 def get_first_unrated_index(unique_list, master_df):
     for idx, sentence in enumerate(unique_list):
         versions = master_df[master_df["incorrect"] == sentence]
+        needs_rating = False
+        
         for m_id in MODEL_TAB_NAMES.keys():
             m_row = versions[versions["id"] == m_id]
             if not m_row.empty:
                 specific_sub_id = str(m_row.index[0] + 2)
-                
                 df = st.session_state.local_dfs.get(m_id)
-                is_rated_by_anyone = False
+                
+                user_has_rated = False
+                total_raters = 0
                 
                 if df is not None and not df.empty:
-                    if (df["submission_id"] == specific_sub_id).any():
-                        is_rated_by_anyone = True
+                    match = df[df["submission_id"] == specific_sub_id]
+                    raters = match["user"].unique().tolist()
+                    total_raters = len(raters)
+                    if st.session_state.username in raters:
+                        user_has_rated = True
                         
-                if not is_rated_by_anyone:
-                    return idx
+                # Stop at this sentence if current user hasn't rated it YET, 
+                # AND it hasn't hit the 2-rating limit yet.
+                if not user_has_rated and total_raters < 2:
+                    needs_rating = True
+                    break 
                     
+        if needs_rating:
+            return idx
+            
     return len(unique_list)
 
 if "u_index" not in st.session_state:
@@ -353,20 +374,20 @@ if st.session_state.u_index >= len(unique_list):
 current_incorrect = unique_list[st.session_state.u_index]
 versions = master_df[master_df["incorrect"] == current_incorrect]
 
-# Check if sentence is fully locked because of ANOTHER user's ratings
-is_locked_by_other = False
+# Check if sentence is fully locked because 2 OTHER users rated it
+is_locked_by_others = False
 for m_id in MODEL_TAB_NAMES.keys():
     m_row = versions[versions["id"] == m_id]
     if not m_row.empty:
-        if is_rated_by_other_user(m_id, str(m_row.index[0] + 2)):
-            is_locked_by_other = True
+        if is_locked_for_user(m_id, str(m_row.index[0] + 2), st.session_state.username):
+            is_locked_by_others = True
             break
 
 # Sentence Counter at the top
 st.markdown(f"<center><h4>Sentence {st.session_state.u_index + 1} of {len(unique_list)}</h4></center>", unsafe_allow_html=True)
 
-if is_locked_by_other:
-    st.info("ℹ️ **This sentence has been rated by another user.** Inputs are locked, but you can skip to the next one using the Next button.")
+if is_locked_by_others:
+    st.info("ℹ️ **This sentence has reached the maximum of 2 ratings.** Inputs are locked, but you can skip to the next one using the Next button.")
 
 st.info(f"**Original:** {current_incorrect}")
 st.divider()
@@ -389,8 +410,7 @@ for row_idx, row_ids in enumerate(rows):
                 
                 all_prev_ratings = get_all_previous_ratings(m_id, specific_sub_id)
                 
-                # Lock ONLY if someone else has rated it
-                is_locked_for_this_model = is_rated_by_other_user(m_id, specific_sub_id)
+                is_locked_for_this_model = is_locked_for_user(m_id, specific_sub_id, st.session_state.username)
                 
                 if all_prev_ratings:
                     st.caption(f"**Previous Ratings:** {all_prev_ratings}")
@@ -424,15 +444,14 @@ for row_idx, row_ids in enumerate(rows):
 
 st.divider()
 
-# Pre-fill correction box, lock ONLY if rated by another user
+# Pre-fill correction box, lock ONLY if max ratings reached by others
 general_sub_id = str(versions.index[0] + 2) if not versions.empty else None
 existing_correction = get_existing_correction(general_sub_id) if general_sub_id else ""
-st.text_area("Correction (Optional):", value=existing_correction, key=f"fix_{st.session_state.u_index}", disabled=is_locked_by_other)
+st.text_area("Correction (Optional):", value=existing_correction, key=f"fix_{st.session_state.u_index}", disabled=is_locked_by_others)
 
 st.divider()
 
 # --- Navigation (Bottom) ---
-# Adjusted column widths to fit the jump feature
 b_c1, b_c2, b_c3, b_c4 = st.columns([2, 3, 2, 2])
 
 with b_c1:
@@ -467,8 +486,8 @@ with b_c4:
             if not m_row.empty:
                 specific_sub_id = str(m_row.index[0] + 2)
                 
-                # Bypass the mandatory rating check if it has been rated by ANOTHER user
-                if is_rated_by_other_user(m_id, specific_sub_id):
+                # Bypass the mandatory rating check if it has been maxed out by other users
+                if is_locked_for_user(m_id, specific_sub_id, st.session_state.username):
                     continue
                     
                 val = st.session_state.get(f"pills_{m_id}_{st.session_state.u_index}")
